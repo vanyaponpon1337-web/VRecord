@@ -297,7 +297,13 @@ final class CameraManager: NSObject, ObservableObject {
 
         session.sessionPreset = .inputPriority
         device.activeFormat = selection.format
-        device.isAutoVideoFrameRateEnabled = false
+
+        // This property was introduced in iOS 18. Keep the app compatible with the
+        // iOS 17 deployment target while explicitly disabling automatic frame-rate
+        // changes on devices where the API is available.
+        if #available(iOS 18.0, *) {
+            device.isAutoVideoFrameRateEnabled = false
+        }
 
         let duration = CMTime(
             value: 600,
