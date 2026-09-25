@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-test:
     runs-on: macos-15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,28 +20,67 @@ jobs:
           xcode-select --print-path
 
       - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project VRecord.xcodeproj -scheme VRecord
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project VRecord.xcodeproj \
+            -scheme VRecord
 
-      - name: Build
-        run: >-
-          xcodebuild
-          -project VRecord.xcodeproj
-          -scheme VRecord
-          -sdk iphoneos
-          -configuration Debug
-          -destination 'generic/platform=iOS'
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          build
+      - name: Build iOS app
+        run: |
+          xcodebuild \
+            -project VRecord.xcodeproj \
+            -scheme VRecord \
+            -sdk iphoneos \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Create unsigned IPA
+        run: |
+          set -e
+
+          APP_PATH="build/Build/Products/Debug-iphoneos/VRecord.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: VRecord.app was not found at:"
+            echo "$APP_PATH"
+            echo ""
+            echo "Available build products:"
+            find build/Build/Products -maxdepth 3 -print || true
+            exit 1
+          fi
+
+          rm -rf Payload
+          mkdir -p Payload
+
+          cp -R "$APP_PATH" Payload/VRecord.app
+
+          rm -f VRecord.ipa
+          zip -qry VRecord.ipa Payload
+
+          echo "IPA created:"
+          ls -lh VRecord.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRecord-unsigned-IPA
+          path: VRecord.ipa
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Test
-        run: >-
-          xcodebuild
-          -project VRecord.xcodeproj
-          -scheme VRecord
-          -sdk iphonesimulator
-          -configuration Debug
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          test
+        run: |
+          xcodebuild \
+            -project VRecord.xcodeproj \
+            -scheme VRecord \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
