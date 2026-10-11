@@ -89,7 +89,7 @@ final class PinchDetectorTests: XCTestCase {
         var detector = PinchDetector()
         XCTAssertFalse(detector.update(id: 0, points: points(ratio: 0, scale: 0.001), at: 0).reliable)
         var invalid = points(ratio: 0.2)
-        invalid[.indexTip] = CGPoint(x: .nan, y: 0)
+        invalid[.indexTip] = CGPoint(x: CGFloat.nan, y: 0)
         XCTAssertFalse(detector.update(id: 0, points: invalid, at: 0).reliable)
     }
 
@@ -117,5 +117,31 @@ final class PinchDetectorTests: XCTestCase {
         XCTAssertFalse(detector.update(id: 0, points: points(ratio: 0.38), at: 0).reliable)
         XCTAssertFalse(detector.update(id: 0, points: points(ratio: 0.38), at: 0.1).reliable)
         XCTAssertTrue(detector.update(id: 0, points: points(ratio: 0.8), at: 0.2).reliable)
+    }
+
+    func testDetectorAndGestureMachineDoNotStopOnHeldPinchAfterOcclusion() {
+        var detector = PinchDetector(configuration: immediateFilterConfiguration())
+        var machine = GestureStateMachine()
+        func detected(_ measurement: PinchDetector.Measurement) -> HandLandmarks {
+            HandLandmarks(id: 0, points: [:], pinching: measurement.pinching,
+                          isGestureReliable: measurement.reliable, handedness: .left)
+        }
+        let initial = detector.update(id: 0, points: points(ratio: 0.2), at: 0)
+        _ = machine.update(hands: [detected(initial)], at: 0)
+        let onset = detector.update(id: 0, points: points(ratio: 0.2), at: 0.06)
+        _ = machine.update(hands: [detected(onset)], at: 0.06)
+        for time in [0.16, 0.26, 0.36, 0.46, 0.56, 0.66, 0.76, 0.86, 0.96] {
+            let held = detector.update(id: 0, points: points(ratio: 0.2), at: time)
+            XCTAssertEqual(machine.update(hands: [detected(held)], at: time), [])
+        }
+        let held = detector.update(id: 0, points: points(ratio: 0.2), at: 1.07)
+        XCTAssertEqual(machine.update(hands: [detected(held)], at: 1.07), [.startRecording])
+        XCTAssertEqual(machine.update(hands: [], at: 1.2), [])
+        detector.retain(ids: [])
+        let returning = detector.update(id: 0, points: points(ratio: 0.2), at: 1.3)
+        XCTAssertEqual(machine.update(hands: [detected(returning)], at: 1.3), [])
+        let returningStable = detector.update(id: 0, points: points(ratio: 0.2), at: 1.36)
+        XCTAssertEqual(machine.update(hands: [detected(returningStable)], at: 1.36), [])
+        XCTAssertTrue(machine.isRecording)
     }
 }

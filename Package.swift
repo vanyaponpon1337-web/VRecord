@@ -16,7 +16,9 @@ let package = Package(
             sources: ["Core/GestureStateMachine.swift", "Tracking/HandLandmarks.swift",
                       "Tracking/PinchDetector.swift"]
         ),
-        .testTarget(name: "VRecordCoreTests", dependencies: ["VRecordCore"], path: "Tests")
+        .testTarget(name: "VRecordCoreTests", dependencies: ["VRecordCore"], path: "Tests"),
+        .target(name: "VRecordMedia", path: "VRecord/Recording"),
+        .testTarget(name: "VRecordMediaTests", dependencies: ["VRecordMedia"], path: "TestsMedia")
     ],
     swiftLanguageVersions: [.v5]
 )

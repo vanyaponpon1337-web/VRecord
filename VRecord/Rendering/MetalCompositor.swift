@@ -1,6 +1,7 @@
 import CoreVideo
 import Foundation
 import Metal
+import os
 
 enum MetalRenderingError: LocalizedError {
     case unavailable
@@ -28,6 +29,7 @@ final class MetalCompositor {
     private let textureCache: CVMetalTextureCache
     private let textureLock = NSLock()
     private let resourceLock = NSLock()
+    private let log = Logger(subsystem: "com.vrecord.app", category: "Metal")
     private var pool: CVPixelBufferPool?
     private var poolWidth = 0
     private var poolHeight = 0
@@ -135,7 +137,12 @@ final class MetalCompositor {
             // Core Video texture wrappers and camera storage must outlive GPU use.
             withExtendedLifetime((pixelBuffer, source.cvTexture, destination.cvTexture)) {
                 releaseSlot(slot)
-                if completed.status == .completed { completion(output) }
+                if completed.status == .completed {
+                    completion(output)
+                } else {
+                    let message = completed.error?.localizedDescription ?? "Unknown GPU failure"
+                    log.error("Frame compositing failed: \(message, privacy: .public)")
+                }
             }
         }
         commandBuffer.commit()

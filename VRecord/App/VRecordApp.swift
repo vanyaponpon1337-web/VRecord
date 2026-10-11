@@ -56,6 +56,7 @@ final class ImmersiveViewController: UIViewController {
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.reportOrientation() }
     }
     private func reportOrientation() {
-        if let value = view.window?.windowScene?.interfaceOrientation, value.isLandscape { onOrientation?(value) }
+        let value = view.window?.windowScene?.interfaceOrientation ?? UIApplication.shared.statusBarOrientation
+        if value.isLandscape { onOrientation?(value) }
     }
 }

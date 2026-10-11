@@ -19,6 +19,7 @@ final class CameraFramePipeline {
     private var pendingStill: (buffer: CVPixelBuffer, hands: [HandLandmarks])?
     private var active = false
     private var generation = 0
+    private var photoEpoch = 0
     private var microphone = false
     private var finalizing = false
     private var interruptionCompletions: [() -> Void] = []
@@ -52,6 +53,7 @@ final class CameraFramePipeline {
         let previousState = gestures.state
         let actions = gestures.update(hands: hands, at: now)
         if gestures.state == .pinchPending && previousState == .idle {
+            photoEpoch += 1
             redFrame = nil
             pinchSource = nil
         }
@@ -63,6 +65,7 @@ final class CameraFramePipeline {
                 else if let pinchSource { pendingStill = pinchSource }
                 redFrame = nil
                 pinchSource = nil
+                photoEpoch += 1
             case .startRecording:
                 do {
                     try recorder.start(width: CVPixelBufferGetWidth(pixelBuffer),
@@ -78,6 +81,7 @@ final class CameraFramePipeline {
             }
         }
         let epoch = generation
+        let shutterEpoch = photoEpoch
         let hasRedSkeleton = hands.contains { $0.pinching }
         if let still = pendingStill {
             let submitted = compositor.composite(pixelBuffer: still.buffer, hands: still.hands) { [weak self] frame in
@@ -91,7 +95,7 @@ final class CameraFramePipeline {
             self.queue.async {
                 guard self.active, epoch == self.generation else { return }
                 self.preview.submit(pixelBuffer: frame)
-                if hasRedSkeleton { self.redFrame = frame }
+                if hasRedSkeleton && shutterEpoch == self.photoEpoch { self.redFrame = frame }
                 if self.gestures.isRecording {
                     self.recorder.appendVideo(pixelBuffer: frame, at: timestamp)
                 }
