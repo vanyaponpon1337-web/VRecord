@@ -24,6 +24,8 @@ struct GestureStateMachine {
     private var initiatingHand: HandID?
     private var initiatingHandedness: Handedness = .unknown
     private var stopArmed = false
+    private var requiresRelease = false
+    private var releaseBarrierSides = Set<Handedness>()
     private var lastTimestamp: TimeInterval?
     let longPinchDuration: TimeInterval
 
@@ -93,7 +95,25 @@ struct GestureStateMachine {
             tracks[id] = track
         }
 
+        if requiresRelease {
+            consumeHeldPinches()
+            for hand in reliable.values where !hand.pinching {
+                releaseBarrierSides.remove(hand.handedness)
+            }
+            // Empty or unreliable observations are tracking loss, not proof of
+            // release. Known consumed sides must each be observed open, even
+            // if a reset has replaced their spatial IDs.
+            if releaseBarrierSides.isEmpty, !reliable.isEmpty,
+               reliable.values.allSatisfy({ !$0.pinching }) {
+                requiresRelease = false
+            }
+            if state == .pinchPending { state = .idle }
+            pruneLostTracks()
+            return []
+        }
+
         if state == .finalizing {
+            if reliable.values.contains(where: { $0.pinching }) { armReleaseBarrier() }
             consumeHeldPinches()
             pruneLostTracks()
             return []
@@ -104,6 +124,7 @@ struct GestureStateMachine {
             // the stop gate must have been armed before this observation.
             if armedAtStart && !onsets.isEmpty {
                 state = .finalizing
+                armReleaseBarrier()
                 consumeHeldPinches()
                 pruneLostTracks()
                 return [.stopRecording]
@@ -143,6 +164,9 @@ struct GestureStateMachine {
     /// Call after AVAssetWriter finalization (including a failed start). Held
     /// stop gestures remain consumed, so they cannot restart recording.
     mutating func finishFinalizing() {
+        // A failed recording start may call this directly. For a normal stop,
+        // preserve releases already observed while the writer was finalizing.
+        if state != .finalizing { armReleaseBarrier() }
         state = .idle
         initiatingHand = nil
         initiatingHandedness = .unknown
@@ -159,6 +183,8 @@ struct GestureStateMachine {
     /// Used by camera/audio interruption and backgrounding.
     mutating func interrupt() -> [GestureAction] {
         cancelPending()
+        if state == .finalizing { return [] }
+        armReleaseBarrier()
         guard state == .recording else { return [] }
         state = .finalizing
         return [.stopRecording]
@@ -170,6 +196,13 @@ struct GestureStateMachine {
             if track.pinching { track.consumed = true }
             track.startedAt = nil
             tracks[id] = track
+        }
+    }
+
+    private mutating func armReleaseBarrier() {
+        requiresRelease = true
+        for track in tracks.values where track.pinching && !track.lost && track.handedness != .unknown {
+            releaseBarrierSides.insert(track.handedness)
         }
     }
 

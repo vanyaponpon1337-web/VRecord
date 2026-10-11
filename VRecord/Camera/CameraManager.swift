@@ -136,12 +136,17 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         session.outputs.forEach(session.removeOutput)
         session.sessionPreset = .inputPriority
         session.automaticallyConfiguresApplicationAudioSession = false
+        session.automaticallyConfiguresCaptureDeviceForWideColor = false
         let input = try AVCaptureDeviceInput(device: camera)
         guard session.canAddInput(input), session.canAddOutput(videoOutput) else { throw CameraError.cannotAttachOutput }
         session.addInput(input)
         session.addOutput(videoOutput)
         try camera.lockForConfiguration()
         camera.activeFormat = format
+        // The shared BGRA pipeline and broadly compatible H.264 exports use SDR.
+        if format.supportedColorSpaces.contains(.sRGB) { camera.activeColorSpace = .sRGB }
+        camera.automaticallyAdjustsVideoHDREnabled = false
+        camera.isVideoHDREnabled = false
         camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
         camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60)
         if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }

@@ -3,7 +3,7 @@ import CoreGraphics
 
 typealias HandID = Int
 
-enum Handedness: Equatable {
+enum Handedness: Hashable {
     case left, right, unknown
 }
 

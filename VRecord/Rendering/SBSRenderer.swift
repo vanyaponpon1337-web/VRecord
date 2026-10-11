@@ -123,7 +123,7 @@ final class SBSRenderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { [self, frame] _ in
-            withExtendedLifetime(frame) { gpuSlot.signal() }
+            withExtendedLifetime(frame) { _ = gpuSlot.signal() }
         }
         commandBuffer.commit()
     }
