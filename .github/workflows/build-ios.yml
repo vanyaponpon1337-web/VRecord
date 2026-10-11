@@ -1,0 +1,84 @@
+name: Build unsigned iOS IPA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: vrecord-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select compatible Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode_16.4.app ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          python3 -c 'import subprocess; v=subprocess.check_output(["xcrun","--sdk","iphoneos","--show-sdk-version"],text=True).strip(); assert tuple(map(int,v.split(".")[:2])) >= (18,5), v'
+      - name: Test deterministic gesture and pinch logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          swift test 2>&1 | tee build/tests.log
+      - name: Verify production Metal compositing pixels
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-metal.sh 2>&1 | tee build/metal-verification.log
+      - name: Build physical iPhone app without signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project VRecord.xcodeproj -scheme VRecord \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build/xcodebuild.log
+      - name: Verify and package original unsigned app
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=build/DerivedData/Build/Products/Release-iphoneos/VRecord.app
+          test -f "$APP/VRecord"
+          test -s "$APP/default.metallib"
+          plutil -lint "$APP/Info.plist"
+          file "$APP/VRecord" | tee build/executable.txt
+          if codesign --display "$APP" >build/codesign.txt 2>&1; then
+            echo 'Unexpected signature in unsigned build' >&2
+            exit 1
+          fi
+          python3 scripts/verify_app.py "$APP" | tee build/verification.txt
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/VRecord.app
+          cd build/ipa
+          ditto -c -k --keepParent Payload ../VRecord-Unsigned.ipa
+          unzip -t ../VRecord-Unsigned.ipa
+          shasum -a 256 ../VRecord-Unsigned.ipa > ../VRecord-Unsigned.ipa.sha256
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRecord-Unsigned
+          path: |
+            build/VRecord-Unsigned.ipa
+            build/VRecord-Unsigned.ipa.sha256
+            build/verification.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRecord-build-logs
+          path: build/*.log
+          if-no-files-found: ignore
+          retention-days: 14

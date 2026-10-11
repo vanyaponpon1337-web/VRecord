@@ -1,0 +1,9 @@
+build/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+*.ipa
+*.xcresult
+*.log
