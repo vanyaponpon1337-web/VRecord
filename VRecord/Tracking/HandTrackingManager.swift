@@ -1,18 +1,23 @@
 import Foundation
 import CoreGraphics
 import CoreVideo
+import CoreMedia
 import Vision
 import ImageIO
 import CoreImage
 import Metal
 
-/// Capture and rendering never wait for Vision. At most one image is in
+/// Capture never waits for Vision. Results retain their exact source image. At most one image is in
 /// inference and one pending image is retained; newer submissions replace it.
 final class HandTrackingManager {
+    var onFrame: ((CVPixelBuffer, CMTime, HandTrackingSnapshot, Int) -> Void)?
+
     private struct Job {
         let buffer: CVPixelBuffer
         let timestamp: TimeInterval
         let generation: UInt64
+        let presentationTime: CMTime
+        let contextID: Int
     }
 
     private struct Detection {
@@ -36,7 +41,6 @@ final class HandTrackingManager {
     private var generation: UInt64 = 0
     private var latest = HandTrackingSnapshot(hands: [], timestamp: 0)
     private var lastSubmission = -TimeInterval.greatestFiniteMagnitude
-    private let maximumSnapshotAge: TimeInterval = 0.10
     private let minimumInferenceInterval: TimeInterval = 0
 
     // The following are exclusively owned by inferenceQueue.
@@ -56,7 +60,8 @@ final class HandTrackingManager {
 
     /// timestamp must be monotonic, normally ProcessInfo.processInfo.systemUptime.
     /// Buffer pixels must already be physically rotated to landscape, unmirrored.
-    func submit(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) {
+    func submit(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval,
+                presentationTime: CMTime, contextID: Int) {
         guard timestamp.isFinite else { return }
         lock.lock()
         guard timestamp >= lastSubmission + minimumInferenceInterval else {
@@ -64,24 +69,14 @@ final class HandTrackingManager {
             return
         }
         lastSubmission = timestamp
-        pending = Job(buffer: pixelBuffer, timestamp: timestamp, generation: generation)
+        pending = Job(buffer: pixelBuffer, timestamp: timestamp, generation: generation,
+                      presentationTime: presentationTime, contextID: contextID)
         let shouldStart = !running
         if shouldStart { running = true }
         lock.unlock()
         if shouldStart {
             inferenceQueue.async { [weak self] in self?.drain() }
         }
-    }
-
-    func snapshot(at timestamp: TimeInterval) -> HandTrackingSnapshot {
-        lock.lock()
-        let result = latest
-        lock.unlock()
-        let age = timestamp - result.timestamp
-        guard age >= -0.02, age <= maximumSnapshotAge else {
-            return HandTrackingSnapshot(hands: [], timestamp: timestamp)
-        }
-        return result
     }
 
     /// Invalidates an in-flight result immediately without blocking capture.
@@ -114,10 +109,12 @@ final class HandTrackingManager {
                 return process(job)
             }
             lock.lock()
-            if job.generation == generation, result.timestamp >= latest.timestamp {
-                latest = result
-            }
+            let publish = job.generation == generation && result.timestamp >= latest.timestamp
+            if publish { latest = result }
             lock.unlock()
+            if publish {
+                onFrame?(job.buffer, job.presentationTime, result, job.contextID)
+            }
         }
     }
 
@@ -207,22 +204,6 @@ final class HandTrackingManager {
             return identity.chirality == detection.chirality ? distance * 0.25 : distance + 0.9
         }
         return distance
-    }
-
-    private func smooth(_ points: [HandJoint: CGPoint], previous: [HandJoint: CGPoint],
-                        elapsed: TimeInterval, aspectRatio: CGFloat) -> [HandJoint: CGPoint] {
-        guard elapsed > 0, elapsed < 0.15 else { return points }
-        let baseAlpha = CGFloat(1 - exp(-elapsed / 0.025))
-        var result = points
-        for (joint, point) in points {
-            guard let old = previous[joint] else { continue }
-            let movement = hypot((point.x - old.x) * aspectRatio, point.y - old.y)
-            // Large movements bypass smoothing to avoid visible trailing bones.
-            let alpha = movement > 0.035 ? CGFloat(1) : max(0.55, baseAlpha)
-            result[joint] = CGPoint(x: old.x + alpha * (point.x - old.x),
-                                    y: old.y + alpha * (point.y - old.y))
-        }
-        return result
     }
 
     private static let visionJoints: [(HandJoint, VNHumanHandPoseObservation.JointName)] = [

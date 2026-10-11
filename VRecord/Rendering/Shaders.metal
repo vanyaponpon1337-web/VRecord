@@ -68,5 +68,5 @@ fragment float4 vrecord_indicator_fragment(IndicatorRasterData in [[stage_in]]) 
     float distance = length(in.local);
     float coverage = 1.0 - smoothstep(1.0 - fwidth(distance), 1.0, distance);
     if (coverage <= 0) discard_fragment();
-    return float4(1.0, 0.0, 0.0, 0.72 * coverage);
+    return float4(1.0, 0.0, 0.0, 0.40 * coverage);
 }

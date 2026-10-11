@@ -8,6 +8,7 @@ final class CameraFramePipeline {
     var onRecovery: (() -> Void)?
     private let queue: DispatchQueue
     private let tracking = HandTrackingManager()
+    private let matchedFrameSlot = DispatchSemaphore(value: 1)
     private var gestures = GestureStateMachine()
     private let compositor: MetalCompositor
     private let preview: SBSPreviewView
@@ -30,6 +31,16 @@ final class CameraFramePipeline {
         self.queue = queue
         self.compositor = compositor
         self.preview = preview
+        // One completed pair may await the camera queue. Never accumulate
+        // full-resolution frames when the encoder or GPU is under pressure.
+        tracking.onFrame = { [weak self] buffer, time, snapshot, contextID in
+            guard let self, self.matchedFrameSlot.wait(timeout: .now()) == .success else { return }
+            self.queue.async {
+                defer { self.matchedFrameSlot.signal() }
+                guard self.active, contextID == self.generation else { return }
+                self.receiveMatched(pixelBuffer: buffer, timestamp: time, snapshot: snapshot)
+            }
+        }
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
             self.log.error("Encoder failure: \(error.localizedDescription, privacy: .public)")
@@ -51,8 +62,16 @@ final class CameraFramePipeline {
     func receive(pixelBuffer: CVPixelBuffer, timestamp: CMTime) {
         guard active else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        tracking.submit(pixelBuffer: pixelBuffer, timestamp: now)
-        let hands = tracking.snapshot(at: now).hands
+        tracking.submit(pixelBuffer: pixelBuffer, timestamp: now,
+                        presentationTime: timestamp, contextID: generation)
+    }
+
+    /// Camera image, pose and capture PTS always originate from the same frame.
+    /// Preview and exports share this pair; no stale pose overlays newer video.
+    private func receiveMatched(pixelBuffer: CVPixelBuffer, timestamp: CMTime,
+                                snapshot: HandTrackingSnapshot) {
+        let now = snapshot.timestamp
+        let hands = snapshot.hands
         let previousState = gestures.state
         let actions = gestures.update(hands: hands, at: now)
         if gestures.state == .pinchPending && previousState == .idle {
