@@ -28,14 +28,14 @@ final class HandTrackingManager {
     }
 
     private let lock = NSLock()
-    private let inferenceQueue = DispatchQueue(label: "com.vrecord.hand-tracking", qos: .userInitiated)
+    private let inferenceQueue = DispatchQueue(label: "com.vrecord.hand-tracking", qos: .userInteractive)
     private var pending: Job?
     private var running = false
     private var generation: UInt64 = 0
     private var latest = HandTrackingSnapshot(hands: [], timestamp: 0)
     private var lastSubmission = -TimeInterval.greatestFiniteMagnitude
-    private let maximumSnapshotAge: TimeInterval = 0.18
-    private let minimumInferenceInterval: TimeInterval = 1.0 / 30.0
+    private let maximumSnapshotAge: TimeInterval = 0.10
+    private let minimumInferenceInterval: TimeInterval = 0
 
     // The following are exclusively owned by inferenceQueue.
     private let request: VNDetectHumanHandPoseRequest
@@ -163,8 +163,7 @@ final class HandTrackingManager {
             if let index = matchedIndex {
                 let old = identities[index]
                 id = old.id
-                smoothed = smooth(detection.points, previous: old.points,
-                                  elapsed: timestamp - old.lastSeen, aspectRatio: aspectRatio)
+                smoothed = detection.points
                 identities[index] = Identity(id: id, palm: detection.palm,
                     chirality: detection.chirality, points: smoothed, lastSeen: timestamp)
             } else {
