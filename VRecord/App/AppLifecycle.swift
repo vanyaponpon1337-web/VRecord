@@ -19,6 +19,7 @@ final class AppLifecycle {
         viewController = ImmersiveViewController()
         viewController.view = preview
         pipeline = CameraFramePipeline(queue: camera.frameQueue, compositor: compositor, preview: preview)
+        pipeline.onRecovery = { [weak self] in DispatchQueue.main.async { self?.foreground() } }
         camera.onVideo = { [weak self] in self?.pipeline.receive(pixelBuffer: $0, timestamp: $1) }
         camera.onAudio = { [weak self] in self?.pipeline.receiveAudio($0) }
         camera.onInterruption = { [weak self] in

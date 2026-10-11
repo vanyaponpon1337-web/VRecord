@@ -5,6 +5,7 @@ import os
 /// All gesture state and frame bookkeeping belongs to CameraManager.frameQueue.
 /// GPU completions return to that queue before touching shared application state.
 final class CameraFramePipeline {
+    var onRecovery: (() -> Void)?
     private let queue: DispatchQueue
     private let tracking = HandTrackingManager()
     private var gestures = GestureStateMachine()
@@ -22,6 +23,7 @@ final class CameraFramePipeline {
     private var photoEpoch = 0
     private var microphone = false
     private var finalizing = false
+    private var recordingStart: CMTime?
     private var interruptionCompletions: [() -> Void] = []
 
     init(queue: DispatchQueue, compositor: MetalCompositor, preview: SBSPreviewView) {
@@ -31,13 +33,14 @@ final class CameraFramePipeline {
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
             self.log.error("Encoder failure: \(error.localizedDescription, privacy: .public)")
-            self.interrupt()
+            self.interrupt { [weak self] in self?.onRecovery?() }
         }
     }
 
     func activate(microphone: Bool) {
         queue.async {
             self.microphone = microphone
+            guard !self.active else { return }
             self.active = true
             self.tracking.reset()
             self.gestures.cancelPending()
@@ -57,7 +60,8 @@ final class CameraFramePipeline {
             redFrame = nil
             pinchSource = nil
         }
-        if hands.contains(where: { $0.pinching }) { pinchSource = (pixelBuffer, hands) }
+        if gestures.state == .pinchPending, redFrame == nil,
+           hands.contains(where: { $0.pinching }) { pinchSource = (pixelBuffer, hands) }
         for action in actions {
             switch action {
             case .takePhoto:
@@ -70,6 +74,9 @@ final class CameraFramePipeline {
                 do {
                     try recorder.start(width: CVPixelBufferGetWidth(pixelBuffer),
                                        height: CVPixelBufferGetHeight(pixelBuffer), audioEnabled: microphone)
+                    recordingStart = timestamp
+                    redFrame = nil
+                    pinchSource = nil
                     preview.setRecording(true)
                 } catch {
                     log.error("Cannot start recording: \(error.localizedDescription, privacy: .public)")
@@ -95,15 +102,19 @@ final class CameraFramePipeline {
             self.queue.async {
                 guard self.active, epoch == self.generation else { return }
                 self.preview.submit(pixelBuffer: frame)
-                if hasRedSkeleton && shutterEpoch == self.photoEpoch { self.redFrame = frame }
-                if self.gestures.isRecording {
+                if hasRedSkeleton && shutterEpoch == self.photoEpoch && self.gestures.state == .pinchPending {
+                    self.redFrame = frame
+                    self.pinchSource = nil
+                }
+                if self.gestures.isRecording, let start = self.recordingStart,
+                   CMTimeCompare(timestamp, start) >= 0 {
                     self.recorder.appendVideo(pixelBuffer: frame, at: timestamp)
                 }
             }
         }
         // Retain at most one gesture frame. A stale red frame is never used for
         // an unrelated photo: a new pending pinch replaces it before release.
-        if hands.isEmpty { redFrame = nil }
+        if hands.isEmpty { redFrame = nil; pinchSource = nil }
     }
 
     func receiveAudio(_ sampleBuffer: CMSampleBuffer) { recorder.appendAudio(sampleBuffer) }
@@ -147,6 +158,7 @@ final class CameraFramePipeline {
 
     private func finishRecording() {
         preview.setRecording(false)
+        recordingStart = nil
         guard !finalizing else { return }
         finalizing = true
         recorder.stop { [weak self] result in
