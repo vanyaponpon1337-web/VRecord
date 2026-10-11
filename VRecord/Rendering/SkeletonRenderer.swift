@@ -17,8 +17,8 @@ enum SkeletonRenderer {
         var count = 0
         let imageSize = SIMD2<Float>(Float(width), Float(height))
         let lineWidth = max(2, Float(min(width, height)) * 0.0024)
-        let jointRadius = lineWidth * 0.8
-        let circleSegments = 10
+        let jointRadius = lineWidth * 2.0
+        let circleSegments = 16
 
         func clip(_ point: SIMD2<Float>) -> SIMD2<Float> {
             SIMD2<Float>(point.x / imageSize.x * 2 - 1, 1 - point.y / imageSize.y * 2)

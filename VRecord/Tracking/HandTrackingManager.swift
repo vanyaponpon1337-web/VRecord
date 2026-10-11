@@ -3,6 +3,8 @@ import CoreGraphics
 import CoreVideo
 import Vision
 import ImageIO
+import CoreImage
+import Metal
 
 /// Capture and rendering never wait for Vision. At most one image is in
 /// inference and one pending image is retained; newer submissions replace it.
@@ -44,6 +46,7 @@ final class HandTrackingManager {
     private var identities: [Identity] = []
     private var nextID: HandID = 0
     private var pinchDetector = PinchDetector()
+    private let visionInput = VisionInputScaler()
 
     init() {
         request = VNDetectHumanHandPoseRequest()
@@ -120,7 +123,8 @@ final class HandTrackingManager {
 
     private func process(_ job: Job) -> HandTrackingSnapshot {
         do {
-            try sequence.perform([request], on: job.buffer, orientation: .up)
+            let input = try visionInput.prepare(job.buffer)
+            try sequence.perform([request], on: input.buffer, orientation: .up)
             let detections = (request.results ?? []).compactMap { observation -> Detection? in
                 guard let recognized = try? observation.recognizedPoints(.all) else { return nil }
                 var points: [HandJoint: CGPoint] = [:]
@@ -128,8 +132,10 @@ final class HandTrackingManager {
                 for (joint, visionJoint) in Self.visionJoints {
                     guard let point = recognized[visionJoint], point.confidence >= 0.35,
                           point.location.x.isFinite, point.location.y.isFinite else { continue }
-                    points[joint] = CGPoint(x: min(1, max(0, point.location.x)),
-                                            y: min(1, max(0, 1 - point.location.y)))
+                    let x = (point.location.x * 640 - input.offsetX) / input.width
+                    let y = ((1 - point.location.y) * 480 - input.offsetY) / input.height
+                    guard x >= 0, x <= 1, y >= 0, y <= 1 else { continue }
+                    points[joint] = CGPoint(x: x, y: y)
                 }
                 guard points.count >= 5,
                       let palm = points[.middleMCP] ?? points[.wrist] else { return nil }
@@ -227,4 +233,54 @@ final class HandTrackingManager {
         (.ringMCP, .ringMCP), (.ringPIP, .ringPIP), (.ringDIP, .ringDIP), (.ringTip, .ringTip),
         (.littleMCP, .littleMCP), (.littlePIP, .littlePIP), (.littleDIP, .littleDIP), (.littleTip, .littleTip)
     ]
+}
+
+/// GPU letterboxing preserves hand proportions; coordinates are mapped back to
+/// the original full-resolution camera image before compositing and gestures.
+private final class VisionInputScaler {
+    struct Input {
+        let buffer: CVPixelBuffer
+        let offsetX: CGFloat
+        let offsetY: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+    }
+    private let context: CIContext
+    private var pool: CVPixelBufferPool?
+    init() {
+        if let device = MTLCreateSystemDefaultDevice() {
+            context = CIContext(mtlDevice: device, options: [.cacheIntermediates: false])
+        } else {
+            context = CIContext(options: [.cacheIntermediates: false])
+        }
+        let attributes: [String: Any] = [
+            kCVPixelBufferWidthKey as String: 640,
+            kCVPixelBufferHeightKey as String: 480,
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
+    }
+    func prepare(_ source: CVPixelBuffer) throws -> Input {
+        var destination: CVPixelBuffer?
+        guard let pool, CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
+            [kCVPixelBufferPoolAllocationThresholdKey as String: 2] as CFDictionary,
+            &destination) == kCVReturnSuccess, let destination else {
+            throw NSError(domain: "VRecord.VisionInput", code: 1)
+        }
+        let sourceWidth = CGFloat(CVPixelBufferGetWidth(source))
+        let sourceHeight = CGFloat(CVPixelBufferGetHeight(source))
+        let scale = min(640 / sourceWidth, 480 / sourceHeight)
+        let width = sourceWidth * scale, height = sourceHeight * scale
+        let x = (640 - width) / 2, y = (480 - height) / 2
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: 480)
+        let image = CIImage(cvPixelBuffer: source)
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(translationX: x, y: y))
+            .composited(over: CIImage(color: .black).cropped(to: bounds))
+        context.render(image, to: destination, bounds: bounds,
+                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        return Input(buffer: destination, offsetX: x, offsetY: y, width: width, height: height)
+    }
 }

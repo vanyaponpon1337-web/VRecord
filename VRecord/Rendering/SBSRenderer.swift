@@ -101,8 +101,8 @@ final class SBSRenderer: NSObject, MTKViewDelegate {
         }
 
         let scale = Float(view.contentScaleFactor)
-        let center = Float(16) * scale
-        let radius = Float(4) * scale
+        let center = Float(22) * scale
+        let radius = Float(9) * scale
         var circle = SIMD4<Float>(center / Float(eyeWidth) * 2 - 1,
                                   1 - center / Float(eyeHeight) * 2,
                                   radius / Float(eyeWidth) * 2,
